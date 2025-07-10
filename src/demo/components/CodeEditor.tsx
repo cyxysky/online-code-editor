@@ -4,6 +4,7 @@ interface CodeEditorProps {
   value: string;
   language: 'jsx' | 'css' | 'javascript';
   onChange: (value: string) => void;
+  onSave?: () => void; // 新增保存回调
   placeholder?: string;
   fileId?: string; // 文件ID，用于管理独立的历史记录
 }
@@ -14,10 +15,11 @@ interface HistoryEntry {
   timestamp: number;
 }
 
-const CodeEditor: React.FC<CodeEditorProps> = ({ 
-  value, 
-  language, 
-  onChange, 
+const CodeEditor: React.FC<CodeEditorProps> = ({
+  value,
+  language,
+  onChange,
+  onSave,
   placeholder = '请输入代码...',
   fileId
 }) => {
@@ -25,7 +27,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [lineNumbers, setLineNumbers] = useState<string[]>([]);
   const [isComposing, setIsComposing] = useState(false);
-  
+
   // 使用Map来为每个文件存储独立的历史记录
   const fileHistoriesRef = useRef<Map<string, { history: HistoryEntry[], index: number }>>(new Map());
   const lastValueRef = useRef<string>('');
@@ -34,46 +36,46 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
   // 获取当前文件的历史记录
   const getCurrentFileHistory = () => {
     if (!fileId) return { history: [], index: -1 };
-    
+
     if (!fileHistoriesRef.current.has(fileId)) {
       fileHistoriesRef.current.set(fileId, { history: [], index: -1 });
     }
-    
+
     return fileHistoriesRef.current.get(fileId)!;
   };
 
   // 更新当前文件的历史记录
   const updateCurrentFileHistory = (history: HistoryEntry[], index: number) => {
     if (!fileId) return;
-    
+
     fileHistoriesRef.current.set(fileId, { history, index });
   };
 
   // 添加历史记录的函数
   const addToHistory = (content: string) => {
     if (isUndoRedoRef.current || !fileId) return; // 如果是撤销/重做操作或没有fileId，不添加到历史
-    
+
     const currentFileHistory = getCurrentFileHistory();
     const newEntry: HistoryEntry = {
       content,
       timestamp: Date.now()
     };
-    
+
     // 如果当前不在历史记录的末尾，截断后面的记录
-    const newHistory = currentFileHistory.index >= 0 ? 
-      currentFileHistory.history.slice(0, currentFileHistory.index + 1) : 
+    const newHistory = currentFileHistory.index >= 0 ?
+      currentFileHistory.history.slice(0, currentFileHistory.index + 1) :
       currentFileHistory.history;
-    
+
     // 避免连续重复的记录
     if (newHistory.length > 0 && newHistory[newHistory.length - 1].content === content) {
       return;
     }
-    
+
     // 限制历史记录数量
     const updatedHistory = [...newHistory, newEntry];
     const finalHistory = updatedHistory.slice(-50); // 最多保留50条记录
     const newIndex = finalHistory.length - 1;
-    
+
     updateCurrentFileHistory(finalHistory, newIndex);
   };
 
@@ -91,12 +93,12 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
   // 撤销操作
   const handleUndo = () => {
     const currentFileHistory = getCurrentFileHistory();
-    
+
     if (currentFileHistory.index > 0) {
       isUndoRedoRef.current = true;
       const newIndex = currentFileHistory.index - 1;
       const previousEntry = currentFileHistory.history[newIndex];
-      
+
       updateCurrentFileHistory(currentFileHistory.history, newIndex);
       onChange(previousEntry.content);
     }
@@ -105,12 +107,12 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
   // 重做操作
   const handleRedo = () => {
     const currentFileHistory = getCurrentFileHistory();
-    
+
     if (currentFileHistory.index < currentFileHistory.history.length - 1) {
       isUndoRedoRef.current = true;
       const newIndex = currentFileHistory.index + 1;
       const nextEntry = currentFileHistory.history[newIndex];
-      
+
       updateCurrentFileHistory(currentFileHistory.history, newIndex);
       onChange(nextEntry.content);
     }
@@ -123,7 +125,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
       setLineNumbers(['1']);
       return;
     }
-    
+
     const lines = value.split('\n');
     // 确保至少有一行
     const lineCount = Math.max(lines.length, 1);
@@ -133,16 +135,17 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
 
   // 同步编辑器内容
   useEffect(() => {
+    // 在中文输入过程中不要更新DOM，避免打断IME状态
     if (editorRef.current && !isComposing) {
       const editor = editorRef.current;
       const currentContent = getEditorTextContent(editor);
-      
+
       // 只有当内容真正不同时才进行更新
       if (currentContent !== value) {
         const selection = window.getSelection();
         let startOffset = 0;
         let endOffset = 0;
-        
+
         // 安全地获取当前光标位置
         if (selection && selection.rangeCount > 0) {
           try {
@@ -153,13 +156,19 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
             // 忽略获取选择范围的错误
           }
         }
-        
+
+        // 使用更温和的方式设置内容，避免破坏IME状态
         setEditorContent(editor, value);
-        
+
         // 只在内容不为空且有光标位置时恢复光标
         if (selection && value && (startOffset > 0 || endOffset > 0)) {
           try {
-            restoreCursor(editor, startOffset, endOffset);
+            // 延迟恢复光标，避免与IME冲突
+            setTimeout(() => {
+              if (!isComposing) {
+                restoreCursor(editor, startOffset, endOffset);
+              }
+            }, 0);
           } catch (e) {
             // 忽略光标位置恢复错误，将光标放到末尾
             try {
@@ -184,57 +193,18 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
     }
   }, [value, isComposing]);
 
-  // 获取编辑器的文本内容，正确处理换行
+  // 获取编辑器的文本内容，简化处理提高中文输入兼容性
   const getEditorTextContent = (editor: HTMLDivElement): string => {
-    if (!editor.hasChildNodes()) {
-      return '';
-    }
-    
-    let text = '';
-    for (let i = 0; i < editor.childNodes.length; i++) {
-      const node = editor.childNodes[i];
-      
-      if (node.nodeType === Node.TEXT_NODE) {
-        text += node.textContent || '';
-      } else if (node.nodeName === 'BR') {
-        text += '\n';
-      } else if (node.nodeName === 'DIV') {
-        // 如果前面有内容且不以换行结尾，添加换行
-        if (text && !text.endsWith('\n')) {
-          text += '\n';
-        }
-        // 获取div的文本内容
-        const divText = (node as HTMLElement).innerText || '';
-        text += divText;
-      }
-    }
-    
-    return text;
+    // 使用innerText获取更准确的文本内容，保持换行符
+    return editor.innerText || '';
   };
 
-  // 设置编辑器内容，保持换行格式
+  // 设置编辑器内容，简化处理提高中文输入兼容性
   const setEditorContent = (editor: HTMLDivElement, content: string) => {
-    editor.innerHTML = '';
-    if (!content) return;
-    
-    const lines = content.split('\n');
-    
-    lines.forEach((line, index) => {
-      if (index > 0) {
-        // 添加换行符
-        editor.appendChild(document.createElement('br'));
-      }
-      
-      if (line) {
-        // 添加文本内容
-        const textNode = document.createTextNode(line);
-        editor.appendChild(textNode);
-      } else if (index < lines.length - 1) {
-        // 空行但不是最后一行，需要添加一个空的文本节点来保持结构
-        const textNode = document.createTextNode('');
-        editor.appendChild(textNode);
-      }
-    });
+    // 只在非输入状态时更新内容
+    if (!isComposing) {
+      editor.textContent = content;
+    }
   };
 
   // 获取文本偏移量
@@ -245,7 +215,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
       NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT,
       null
     );
-    
+
     let node = walker.nextNode();
     while (node && node !== container) {
       if (node.nodeType === Node.TEXT_NODE) {
@@ -255,11 +225,11 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
       }
       node = walker.nextNode();
     }
-    
+
     if (node === container && container.nodeType === Node.TEXT_NODE) {
       textOffset += offset;
     }
-    
+
     return textOffset;
   };
 
@@ -267,18 +237,18 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
   const restoreCursor = (editor: HTMLDivElement, startOffset: number, endOffset: number) => {
     const selection = window.getSelection();
     if (!selection) return;
-    
+
     const range = document.createRange();
     let currentOffset = 0;
     let startSet = false;
     let endSet = false;
-    
+
     const walker = document.createTreeWalker(
       editor,
       NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT,
       null
     );
-    
+
     let node = walker.nextNode();
     while (node && (!startSet || !endSet)) {
       if (node.nodeType === Node.TEXT_NODE) {
@@ -305,7 +275,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
       }
       node = walker.nextNode();
     }
-    
+
     if (startSet && endSet) {
       selection.removeAllRanges();
       selection.addRange(range);
@@ -315,22 +285,22 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
   // 处理行号点击，将光标定位到对应行
   const handleLineClick = (lineIndex: number) => {
     if (!editorRef.current) return;
-    
+
     const editor = editorRef.current;
     const lines = value.split('\n');
-    
+
     // 计算到目标行的字符偏移量
     let offset = 0;
     for (let i = 0; i < lineIndex && i < lines.length; i++) {
       offset += lines[i].length + 1; // +1 for newline
     }
-    
+
     // 定位光标到行首
     try {
       const selection = window.getSelection();
       if (selection) {
         const range = document.createRange();
-        
+
         // 遍历编辑器的文本节点找到正确位置
         let currentOffset = 0;
         const walker = document.createTreeWalker(
@@ -338,7 +308,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
           NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT,
           null
         );
-        
+
         let node = walker.nextNode();
         while (node) {
           if (node.nodeType === Node.TEXT_NODE) {
@@ -359,7 +329,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
           }
           node = walker.nextNode();
         }
-        
+
         selection.removeAllRanges();
         selection.addRange(range);
         editor.focus();
@@ -370,22 +340,30 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
     }
   };
 
-  // 处理输入事件
-  const handleInput = (e: React.FormEvent<HTMLDivElement>) => {
-    if (!isComposing) {
-      const content = getEditorTextContent(e.currentTarget);
-      onChange(content);
-    }
+  // 获取当前行的缩进
+  const getCurrentLineIndent = (text: string, cursorPosition: number): string => {
+    const lines = text.substring(0, cursorPosition).split('\n');
+    const currentLine = lines[lines.length - 1];
+    const match = currentLine.match(/^(\s*)/);
+    return match ? match[1] : '';
   };
 
   // 处理键盘事件
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const selection = window.getSelection();
     const isCtrlPressed = e.ctrlKey || e.metaKey;
-    
+
     // 处理快捷键
     if (isCtrlPressed) {
       switch (e.key.toLowerCase()) {
+        case 's':
+          e.preventDefault();
+          // 触发保存和立即编译
+          if (onSave) {
+            onSave();
+          }
+          return;
+
         case 'z':
           e.preventDefault();
           if (e.shiftKey) {
@@ -394,37 +372,37 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
             handleUndo();
           }
           return;
-          
+
         case 'y':
           e.preventDefault();
           handleRedo();
           return;
-          
+
         case 'x':
           e.preventDefault();
           handleCut();
           return;
-          
+
         case 'c':
           e.preventDefault();
           handleCopy();
           return;
-          
+
         case 'v':
           e.preventDefault();
           handlePaste();
           return;
       }
     }
-    
+
     // 处理Tab键
     if (e.key === 'Tab') {
       e.preventDefault();
-      
+
       if (selection && selection.rangeCount > 0) {
         const range = selection.getRangeAt(0);
         const isSelection = !range.collapsed;
-        
+
         if (isSelection) {
           // 有选中内容时，进行缩进或取消缩进
           handleIndentSelection(e.shiftKey);
@@ -438,7 +416,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
             range.setEndAfter(tabNode);
             selection.removeAllRanges();
             selection.addRange(range);
-            
+
             // 触发input事件
             const content = getEditorTextContent(editorRef.current!);
             onChange(content);
@@ -450,13 +428,46 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
         }
       }
     } else if (e.key === 'Enter') {
-      // 确保回车键正确处理
-      setTimeout(() => {
-        if (!isComposing && editorRef.current) {
-          const content = getEditorTextContent(editorRef.current);
-          onChange(content);
+      e.preventDefault();
+      
+      // 处理自动缩进
+      if (selection && selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0);
+        const currentContent = getEditorTextContent(editorRef.current!);
+        const cursorPos = getTextOffset(editorRef.current!, range.startContainer, range.startOffset);
+        
+        // 获取当前行的缩进
+        const currentIndent = getCurrentLineIndent(currentContent, cursorPos);
+        
+        // 检查是否需要增加缩进（例如在{后面）
+        const beforeCursor = currentContent.substring(0, cursorPos);
+        const lastChar = beforeCursor.trim().slice(-1);
+        let extraIndent = '';
+        
+        if (lastChar === '{' || lastChar === '[' || lastChar === '(') {
+          extraIndent = '  '; // 增加两个空格的缩进
         }
-      }, 0);
+        
+        try {
+          // 插入换行符和缩进
+          const newlineWithIndent = '\n' + currentIndent + extraIndent;
+          const textNode = document.createTextNode(newlineWithIndent);
+          range.deleteContents();
+          range.insertNode(textNode);
+          range.setStartAfter(textNode);
+          range.setEndAfter(textNode);
+          selection.removeAllRanges();
+          selection.addRange(range);
+
+          // 触发input事件
+          const content = getEditorTextContent(editorRef.current!);
+          onChange(content);
+        } catch (e) {
+          // 如果操作失败，使用简单的换行
+          const content = getEditorTextContent(editorRef.current!);
+          onChange(content + '\n' + currentIndent + extraIndent);
+        }
+      }
     }
   };
 
@@ -464,22 +475,22 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
   const handleCut = async () => {
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) return;
-    
+
     if (selection.isCollapsed) {
       // 没有选中内容时，剪切当前行
       await handleCutCurrentLine();
     } else {
       // 有选中内容时，剪切选中的内容
       const selectedText = selection.toString();
-      
+
       try {
         // 复制到剪贴板
         await navigator.clipboard.writeText(selectedText);
-        
+
         // 删除选中内容
         const range = selection.getRangeAt(0);
         range.deleteContents();
-        
+
         // 更新编辑器内容
         const content = getEditorTextContent(editorRef.current!);
         onChange(content);
@@ -492,23 +503,23 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
   // 剪切当前行
   const handleCutCurrentLine = async () => {
     if (!editorRef.current) return;
-    
+
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) return;
-    
+
     try {
       const editor = editorRef.current;
       const currentContent = getEditorTextContent(editor);
       const lines = currentContent.split('\n');
-      
+
       // 获取当前光标位置
       const range = selection.getRangeAt(0);
       const currentOffset = getTextOffset(editor, range.startContainer, range.startOffset);
-      
+
       // 计算当前行号
       let lineStart = 0;
       let currentLine = 0;
-      
+
       for (let i = 0; i < lines.length; i++) {
         const lineEnd = lineStart + lines[i].length;
         if (currentOffset >= lineStart && currentOffset <= lineEnd) {
@@ -517,32 +528,32 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
         }
         lineStart = lineEnd + 1; // +1 for newline
       }
-      
+
       // 获取要剪切的行内容
       const lineTocut = lines[currentLine];
       const isLastLine = currentLine === lines.length - 1;
-      
+
       // 构建剪切的文本（包括换行符，除非是最后一行）
       const cutText = isLastLine ? lineTocut : lineTocut + '\n';
-      
+
       // 复制到剪贴板
       await navigator.clipboard.writeText(cutText);
-      
+
       // 删除当前行
       const newLines = [...lines];
       newLines.splice(currentLine, 1);
-      
+
       // 如果删除的是最后一行且不是唯一行，需要移除前一行的换行符
       let newContent = newLines.join('\n');
-      
+
       // 如果删除后没有内容了，保留空字符串
       if (newLines.length === 0) {
         newContent = '';
       }
-      
+
       // 更新内容
       onChange(newContent);
-      
+
       // 重新定位光标
       setTimeout(() => {
         if (editorRef.current && newContent) {
@@ -550,15 +561,15 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
           // 将光标放在当前行的开始（如果当前行还存在）或上一行的开始
           const targetLine = Math.min(currentLine, newLines.length - 1);
           let targetOffset = 0;
-          
+
           for (let i = 0; i < targetLine; i++) {
             targetOffset += newLines[i].length + 1;
           }
-          
+
           restoreCursor(editorRef.current, targetOffset, targetOffset);
         }
       }, 0);
-      
+
     } catch (err) {
       console.warn('剪切当前行失败:', err);
     }
@@ -569,7 +580,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
     const selection = window.getSelection();
     if (selection && selection.rangeCount > 0 && !selection.isCollapsed) {
       const selectedText = selection.toString();
-      
+
       try {
         await navigator.clipboard.writeText(selectedText);
       } catch (err) {
@@ -582,12 +593,12 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
   const handlePaste = async () => {
     try {
       const text = await navigator.clipboard.readText();
-      
+
       const selection = window.getSelection();
       if (selection && selection.rangeCount > 0) {
         const range = selection.getRangeAt(0);
         range.deleteContents();
-        
+
         // 插入粘贴的文本
         const textNode = document.createTextNode(text);
         range.insertNode(textNode);
@@ -595,7 +606,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
         range.setEndAfter(textNode);
         selection.removeAllRanges();
         selection.addRange(range);
-        
+
         // 更新编辑器内容
         const content = getEditorTextContent(editorRef.current!);
         onChange(content);
@@ -609,12 +620,12 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
   const handleIndentSelection = (isUnindent: boolean) => {
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) return;
-    
+
     const range = selection.getRangeAt(0);
     const selectedText = selection.toString();
-    
+
     if (!selectedText) return;
-    
+
     // 获取选中的行
     const lines = selectedText.split('\n');
     const processedLines = lines.map(line => {
@@ -631,22 +642,22 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
         return '  ' + line;
       }
     });
-    
+
     const processedText = processedLines.join('\n');
-    
+
     try {
       // 替换选中内容
       range.deleteContents();
       const textNode = document.createTextNode(processedText);
       range.insertNode(textNode);
-      
+
       // 重新选中处理后的内容
       const newRange = document.createRange();
       newRange.setStartBefore(textNode);
       newRange.setEndAfter(textNode);
       selection.removeAllRanges();
       selection.addRange(newRange);
-      
+
       // 更新编辑器内容
       const content = getEditorTextContent(editorRef.current!);
       onChange(content);
@@ -655,20 +666,40 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
     }
   };
 
-  // 处理输入法事件
-  const handleCompositionStart = () => {
+  // 处理输入法事件 - 优化中文输入支持
+  const handleCompositionStart = (e: React.CompositionEvent<HTMLDivElement>) => {
+    console.log('🎌 开始中文输入');
     setIsComposing(true);
   };
 
   const handleCompositionEnd = (e: React.CompositionEvent<HTMLDivElement>) => {
+    console.log('🎌 结束中文输入，数据：', e.data);
     setIsComposing(false);
-    // 使用setTimeout确保compositionend事件完成后再获取内容
-    setTimeout(() => {
-      if (editorRef.current) {
-        const content = getEditorTextContent(editorRef.current);
-        onChange(content);
-      }
-    }, 0);
+    
+    // 立即更新内容，确保中文输入结果被保存
+    if (editorRef.current) {
+      const content = getEditorTextContent(editorRef.current);
+      console.log('🎌 输入法结束后的内容：', content);
+      onChange(content);
+    }
+  };
+
+  // 处理输入事件 - 优化输入响应
+  const handleInput = (e: React.FormEvent<HTMLDivElement>) => {
+    console.log('📝 handleInput 触发，isComposing:', isComposing);
+    
+    // 在中文输入过程中不处理，等待compositionEnd
+    if (isComposing) {
+      console.log('📝 正在输入中文，跳过处理');
+      return;
+    }
+    
+    // 立即处理普通输入
+    if (editorRef.current) {
+      const content = getEditorTextContent(editorRef.current);
+      console.log('📝 普通输入内容：', content);
+      onChange(content);
+    }
   };
 
   const styles = {
@@ -681,13 +712,15 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
       overflow: 'hidden',
       background: '#ffffff',
       fontSize: '14px',
+      // 确保编辑器有固定高度，类似 VSCode
     },
     scrollContainer: {
       flex: 1,
       display: 'flex',
       background: '#ffffff',
-      overflow: 'auto',
       position: 'relative' as const,
+      height: '100%',
+      overflow: 'auto', // 整个容器可以滚动
     },
     lineNumbers: {
       background: '#f6f8fa',
@@ -698,28 +731,35 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
       textAlign: 'right' as const,
       userSelect: 'none' as const,
       minWidth: '50px',
+      width: '50px',
       borderRight: '1px solid #e1e4e8',
       padding: '16px 12px',
       whiteSpace: 'pre' as const,
       flexShrink: 0,
+      // 行号区域固定位置，不会水平滚动
       position: 'sticky' as const,
-      height: 'fit-content',
-      minHeight: '100%',
       left: 0,
-      zIndex: 1,
+      zIndex: 2,
+      boxSizing: 'border-box' as const,
+      // 行号区域高度自适应内容
+      alignSelf: 'flex-start' as const,
     },
     lineNumber: {
       display: 'block',
       lineHeight: '1.45',
       fontSize: '13px',
       textAlign: 'right' as const,
+      height: '18.85px', // 固定行高，与编辑器行高一致
     },
     editorContainer: {
       flex: 1,
       minWidth: 0,
+      position: 'relative' as const,
+      // 编辑器容器不需要独立滚动，跟随父容器
+      overflow: 'visible',
+      boxSizing: 'border-box' as const,
     },
     codeEditorDiv: {
-      width: '100%',
       outline: 'none',
       fontFamily: "'SF Mono', 'Monaco', 'Consolas', 'Roboto Mono', monospace",
       fontSize: '13px',
@@ -727,18 +767,33 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
       padding: '16px',
       background: '#ffffff',
       color: '#24292f',
-      whiteSpace: 'pre-wrap' as const, // 改为pre-wrap以正确处理换行
-      overflowWrap: 'normal' as const,
+      whiteSpace: 'pre-wrap' as const,
+      overflowWrap: 'break-word' as const,
+      wordBreak: 'normal' as const,
       tabSize: 2,
       border: 'none',
       resize: 'none' as const,
       boxSizing: 'border-box' as const,
-      minHeight: '500px', // 确保有足够高度供点击
+      // 让编辑器内容可以超出容器，触发父容器滚动
+      minHeight: '100%',
+      height: 'auto',
+      // 确保内容可以水平滚动，使用 max-content 让宽度自适应内容
+      minWidth: '100%',
+      width: 'max-content',
+      // 优化中文输入
+      WebkitUserSelect: 'text' as const,
+      MozUserSelect: 'text' as const,
+      userSelect: 'text' as const,
+      // 添加输入法优化
+      WebkitTextFillColor: 'inherit',
+      WebkitOpacity: 1,
+      // 禁用一些可能干扰中文输入的功能
+      WebkitTextSizeAdjust: 'none' as const,
     },
     placeholder: {
       position: 'absolute' as const,
       top: '16px',
-      left: '78px',
+      left: '16px',
       color: '#656d76',
       pointerEvents: 'none' as const,
       fontFamily: "'SF Mono', 'Monaco', 'Consolas', 'Roboto Mono', monospace",
@@ -749,14 +804,14 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
 
   return (
     <div style={styles.codeEditor}>
-      <div 
+      <div
         ref={scrollContainerRef}
         style={styles.scrollContainer}
       >
         <div style={styles.lineNumbers}>
           {lineNumbers.map((num, index) => (
-            <div 
-              key={index} 
+            <div
+              key={index}
               style={{
                 ...styles.lineNumber,
                 cursor: 'pointer',
@@ -773,7 +828,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
             </div>
           ))}
         </div>
-        
+
         <div style={styles.editorContainer}>
           {!value && (
             <div style={styles.placeholder}>
@@ -792,6 +847,15 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
             autoCorrect="off"
             autoCapitalize="off"
             suppressContentEditableWarning={true}
+            // 优化中文输入
+            inputMode="text"
+            lang="zh-CN"
+            // 添加更多输入法支持属性
+            data-gramm="false"
+            data-gramm_editor="false"
+            data-enable-grammarly="false"
+            // 确保输入法正常工作
+            translate="no"
           />
         </div>
       </div>
