@@ -15,6 +15,16 @@ export interface FileInfo {
   language: 'jsx' | 'tsx' | 'js' | 'ts' | 'css';
 }
 
+// 依赖信息接口
+export interface Dependency {
+  name: string;
+  version: string;
+  cdnUrl: string;
+  description?: string;
+  isLoading?: boolean;
+  isInstalled?: boolean;
+}
+
 // 编译结果接口
 export interface CompilationResult {
   success: boolean;
@@ -54,6 +64,7 @@ const STRATEGY_CONFIGS: Record<CompilationStrategy, StrategyConfig> = {
 
 interface CompilerStrategyProps {
   files: FileInfo[];
+  dependencies: Dependency[];
   onCompilationComplete: (result: CompilationResult) => void;
   preferredStrategy?: CompilationStrategy;
 }
@@ -61,7 +72,7 @@ interface CompilerStrategyProps {
 export const CompilerStrategy = forwardRef<
   { forceCompile: () => void },
   CompilerStrategyProps
->(({ files, onCompilationComplete, preferredStrategy }, ref) => {
+>(({ files, dependencies, onCompilationComplete, preferredStrategy }, ref) => {
   const [currentStrategy, setCurrentStrategy] = useState<CompilationStrategy>(
     preferredStrategy || CompilationStrategy.FRONTEND
   );
@@ -241,10 +252,11 @@ export const CompilerStrategy = forwardRef<
       workerRef.current.postMessage({
         id: requestId.toString(),
         modules,
+        dependencies: dependencies,
         entryModule: entryModuleId
       });
     });
-  }, []);
+  }, [dependencies]);
 
   // 后端编译
   const compileBackend = useCallback(async (files: FileInfo[]): Promise<CompilationResult> => {
@@ -259,7 +271,8 @@ export const CompilerStrategy = forwardRef<
             name: file.name,
             content: file.content,
             language: file.language
-          }))
+          })),
+          dependencies: dependencies
         })
       });
 
@@ -282,7 +295,7 @@ export const CompilerStrategy = forwardRef<
         strategy: CompilationStrategy.BACKEND
       };
     }
-  }, []);
+  }, [dependencies]);
 
   // WebContainer编译（模拟实现）
   const compileWebContainer = useCallback(async (files: FileInfo[]): Promise<CompilationResult> => {
@@ -308,6 +321,12 @@ export const CompilerStrategy = forwardRef<
         bundleCode = bundleCode.replace(modulePattern, `const ${moduleName} = ${file.content};`);
       });
 
+      // 处理外部依赖
+      dependencies.forEach(dep => {
+        const depPattern = new RegExp(`import\\s+[^'"]*from\\s+['"]${dep.name}['"]`, 'g');
+        bundleCode = bundleCode.replace(depPattern, `const ${dep.name} = globalThis.${dep.name};`);
+      });
+
       return {
         success: true,
         bundleCode,
@@ -320,7 +339,7 @@ export const CompilerStrategy = forwardRef<
         strategy: CompilationStrategy.WEBCONTAINER
       };
     }
-  }, []);
+  }, [dependencies]);
 
   // 内部编译执行函数
   const performCompile = useCallback(async (strategy: CompilationStrategy = currentStrategy) => {

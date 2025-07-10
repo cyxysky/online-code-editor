@@ -2,7 +2,8 @@ import React, { useState, useCallback, useRef } from 'react';
 import CodeEditor from './components/CodeEditor';
 import { AdvancedPreview } from './components/AdvancedPreview';
 import FileSystem, { FileNode } from './components/FileSystem';
-import { FileInfo, CompilationStrategy } from './components/CompilerStrategy';
+import { FileInfo, CompilationStrategy, Dependency } from './components/CompilerStrategy';
+import DependencyManager from './components/DependencyManager';
 
 // 默认的示例文件
 const DEFAULT_FILES: FileNode[] = [
@@ -17,10 +18,18 @@ import './styles.css';
 const App = () => {
   const [count, setCount] = useState(0);
   const [message, setMessage] = useState('Hello World!');
+  const [items, setItems] = useState(['React', 'TypeScript', 'Vite']);
+
+  // 示例：添加新项目到列表
+  const addItem = () => {
+    const newItem = \`Item \${items.length + 1}\`;
+    setItems([...items, newItem]);
+  };
 
   return (
     <div className="app">
       <h1>{message}</h1>
+      
       <div className="counter">
         <p>计数: <span className="count">{count}</span></p>
         <div className="button-group">
@@ -44,6 +53,18 @@ const App = () => {
           </Button>
         </div>
       </div>
+
+      <div className="item-list">
+        <h3>项目列表 ({items.length})</h3>
+        <ul>
+          {items.map((item, index) => (
+            <li key={index}>{item}</li>
+          ))}
+        </ul>
+        <Button onClick={addItem} variant="primary">
+          添加项目
+        </Button>
+      </div>
       
       <div className="message-input">
         <input
@@ -52,6 +73,9 @@ const App = () => {
           onChange={(e) => setMessage(e.target.value)}
           placeholder="修改消息..."
         />
+        <p className="tip">
+          💡 提示：尝试在依赖管理器中添加 lodash 等库来扩展功能！
+        </p>
       </div>
     </div>
   );
@@ -214,6 +238,46 @@ h1 {
   outline: none;
   border-color: #007bff;
   box-shadow: 0 0 0 3px rgba(0,123,255,0.1);
+}
+
+.item-list {
+  background: #f8f9fa;
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin: 1.5rem 0;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+
+.item-list h3 {
+  color: #495057;
+  margin-bottom: 1rem;
+  font-size: 1.1rem;
+}
+
+.item-list ul {
+  list-style: none;
+  margin-bottom: 1rem;
+}
+
+.item-list li {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #e9ecef;
+  color: #495057;
+}
+
+.item-list li:last-child {
+  border-bottom: none;
+}
+
+.tip {
+  margin-top: 1rem;
+  padding: 0.75rem;
+  background: #e3f2fd;
+  border-left: 4px solid #2196f3;
+  border-radius: 4px;
+  color: #1565c0;
+  font-size: 0.9rem;
+  line-height: 1.4;
 }`
   }
 ];
@@ -223,6 +287,7 @@ const App: React.FC = () => {
   const [files, setFiles] = useState<FileNode[]>(DEFAULT_FILES);
   const [activeFileId, setActiveFileId] = useState<string>('app');
   const [compilationStrategy, setCompilationStrategy] = useState<CompilationStrategy>(CompilationStrategy.FRONTEND);
+  const [dependencies, setDependencies] = useState<Dependency[]>([]);
   const previewRef = useRef<{ forceCompile: () => void } | null>(null);
 
   // 处理保存事件（Ctrl+S）
@@ -354,6 +419,34 @@ const App: React.FC = () => {
     setFiles(toggleNode(files));
   }, [files]);
 
+  // 依赖管理回调
+  const handleDependencyAdd = useCallback((dependency: Dependency) => {
+    setDependencies(prevDeps => {
+      const existingIndex = prevDeps.findIndex(dep => dep.name === dependency.name);
+      if (existingIndex >= 0) {
+        // 更新现有依赖
+        const newDeps = [...prevDeps];
+        newDeps[existingIndex] = dependency;
+        return newDeps;
+      } else {
+        // 添加新依赖
+        return [...prevDeps, dependency];
+      }
+    });
+  }, []);
+
+  const handleDependencyRemove = useCallback((name: string) => {
+    setDependencies(prevDeps => prevDeps.filter(dep => dep.name !== name));
+  }, []);
+
+  const handleDependencyUpdate = useCallback((name: string, version: string) => {
+    setDependencies(prevDeps => 
+      prevDeps.map(dep => 
+        dep.name === name ? { ...dep, version } : dep
+      )
+    );
+  }, []);
+
   // 转换为FileInfo格式供编译器使用
   const getFileInfos = useCallback((): FileInfo[] => {
     const extractFiles = (nodes: FileNode[]): FileInfo[] => {
@@ -442,7 +535,7 @@ const App: React.FC = () => {
     main: {
       flex: 1,
       display: 'grid',
-      gridTemplateColumns: '1fr 2fr 3fr',
+      gridTemplateColumns: '250px 1fr 300px 1fr',
       overflow: 'hidden',
     },
     sidebar: {
@@ -471,6 +564,11 @@ const App: React.FC = () => {
       flex: 1,
       background: '#ffffff',
       overflow: 'hidden',
+    },
+    dependencyArea: {
+      background: '#ffffff',
+      borderLeft: '1px solid #e1e4e8',
+      borderRight: '1px solid #e1e4e8',
     },
     previewArea: {
       background: '#ffffff',
@@ -523,10 +621,20 @@ const App: React.FC = () => {
           )}
         </div>
 
+        <div style={styles.dependencyArea}>
+          <DependencyManager
+            dependencies={dependencies}
+            onDependencyAdd={handleDependencyAdd}
+            onDependencyRemove={handleDependencyRemove}
+            onDependencyUpdate={handleDependencyUpdate}
+          />
+        </div>
+
         <div style={styles.previewArea}>
           <AdvancedPreview
             ref={previewRef}
             files={fileInfos}
+            dependencies={dependencies}
             strategy={compilationStrategy}
           />
         </div>

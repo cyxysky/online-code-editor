@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
-import { CompilerStrategy, CompilationStrategy, CompilationResult, FileInfo } from './CompilerStrategy';
+import { CompilerStrategy, CompilationStrategy, CompilationResult, FileInfo, Dependency } from './CompilerStrategy';
 
 interface AdvancedPreviewProps {
   files: FileInfo[];
+  dependencies: Dependency[];
   strategy?: CompilationStrategy;
   onForceCompile?: () => void; // 新增强制编译回调
 }
@@ -10,7 +11,7 @@ interface AdvancedPreviewProps {
 export const AdvancedPreview = forwardRef<
   { forceCompile: () => void },
   AdvancedPreviewProps
->(({ files, strategy, onForceCompile }, ref) => {
+>(({ files, dependencies, strategy, onForceCompile }, ref) => {
   const [compilationResult, setCompilationResult] = useState<CompilationResult | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
@@ -21,6 +22,12 @@ export const AdvancedPreview = forwardRef<
 
   // 生成预览HTML
   const generatePreviewHTML = useCallback((bundleCode: string, cssCode?: string): string => {
+    // 生成依赖脚本标签
+    const dependencyScripts = dependencies
+      .filter(dep => dep.isInstalled)
+      .map(dep => `<script crossorigin src="${dep.cdnUrl}"></script>`)
+      .join('\n    ');
+
     return `
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -78,6 +85,9 @@ export const AdvancedPreview = forwardRef<
     <!-- React 和 ReactDOM -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- 外部依赖 -->
+    ${dependencyScripts}
 </head>
 <body>
     <div id="root"></div>
@@ -131,7 +141,7 @@ export const AdvancedPreview = forwardRef<
     </script>
 </body>
 </html>`;
-  }, []);
+  }, [dependencies]);
 
   // 创建预览URL
   const createPreviewUrl = useCallback((compilationResult: CompilationResult) => {
@@ -384,6 +394,7 @@ export const AdvancedPreview = forwardRef<
       <CompilerStrategy
         ref={compilerRef}
         files={files}
+        dependencies={dependencies}
         onCompilationComplete={handleCompilationComplete}
         preferredStrategy={strategy}
       />
