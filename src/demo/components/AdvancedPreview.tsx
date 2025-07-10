@@ -20,79 +20,25 @@ export const AdvancedPreview = forwardRef<
   const blobUrlRef = useRef<string>('');
   const compilerRef = useRef<{ forceCompile: () => void } | null>(null);
 
-  // 生成预览HTML
+  // 生成预览HTML - 使用用户的index.html作为模板
   const generatePreviewHTML = useCallback((bundleCode: string, cssCode?: string): string => {
-    // 生成依赖脚本标签
-    const dependencyScripts = dependencies
-      .filter(dep => dep.isInstalled)
-      .map(dep => `<script crossorigin src="${dep.cdnUrl}"></script>`)
-      .join('\n    ');
-
-    return `
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>React 预览</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
-            line-height: 1.6;
-            color: #333;
-            background: #fff;
-        }
-        
-        #root {
-            min-height: 100vh;
-            padding: 20px;
-        }
-        
-        .error-container {
-            background: #fee;
-            border: 1px solid #fcc;
-            border-radius: 8px;
-            padding: 16px;
-            margin: 16px;
-            color: #c33;
-        }
-        
-        .error-title {
-            font-weight: bold;
-            margin-bottom: 8px;
-        }
-        
-        .error-stack {
-            font-family: monospace;
-            font-size: 12px;
-            white-space: pre-wrap;
-            background: #f8f8f8;
-            padding: 8px;
-            border-radius: 4px;
-            margin-top: 8px;
-            overflow-x: auto;
-        }
-        
-        ${cssCode || ''}
-    </style>
+    // 查找用户的index.html文件
+    const indexHtmlFile = files.find(file => file.name === 'index.html');
     
-    <!-- React 和 ReactDOM -->
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    if (!indexHtmlFile || !indexHtmlFile.content) {
+      console.warn('⚠️ 未找到index.html文件，使用默认模板');
+      // 如果没有index.html，使用默认模板
+      return generateFallbackHTML(bundleCode, cssCode);
+    }
     
-    <!-- 外部依赖 -->
-    ${dependencyScripts}
-</head>
-<body>
-    <div id="root"></div>
+    console.log('📄 使用用户的index.html作为预览模板');
+    let htmlContent = indexHtmlFile.content;
     
+    // 注入编译后的JavaScript代码
+    const scriptInjection = `
     <script>
+        console.log('🚀 预览页面开始初始化');
+        
         // 错误处理
         window.onerror = function(message, source, lineno, colno, error) {
             console.error('Runtime Error:', error);
@@ -106,38 +52,107 @@ export const AdvancedPreview = forwardRef<
         });
         
         function showError(title, stack) {
-            const root = document.getElementById('root');
-            if (root) {
-                root.innerHTML = 
-                    '<div class="error-container">' +
-                        '<div class="error-title">' + title + '</div>' +
-                        '<div class="error-stack">' + stack + '</div>' +
-                    '</div>';
-            }
+            const errorDiv = document.createElement('div');
+            errorDiv.innerHTML = 
+                '<div style="background:#fee;border:1px solid #fcc;border-radius:8px;padding:16px;margin:16px;color:#c33;">' +
+                    '<div style="font-weight:bold;margin-bottom:8px;">' + title + '</div>' +
+                    '<pre style="font-family:monospace;font-size:12px;white-space:pre-wrap;background:#f8f8f8;padding:8px;border-radius:4px;margin-top:8px;overflow-x:auto;">' + stack + '</pre>' +
+                '</div>';
+            document.body.appendChild(errorDiv);
         }
         
-        // 确保React可用
-        if (!window.React || !window.ReactDOM) {
-            showError('依赖错误', 'React 或 ReactDOM 未加载');
-        } else {
+        // 等待DOM加载完成后执行
+        function initApp() {
             try {
+                console.log('🔄 开始执行编译代码...');
                 // 执行编译后的代码
                 ${bundleCode}
                 
-                // 渲染组件
-                const container = document.getElementById('root');
+                console.log('✅ 代码执行完成');
+                
+                // 兼容旧模式：如果有__EntryComponent，则渲染React组件
                 if (window.__EntryComponent) {
-                    const element = React.createElement(window.__EntryComponent);
-                    const root = ReactDOM.createRoot(container);
-                    root.render(element);
-                } else {
-                    showError('组件错误', '未找到可渲染的组件。请确保导出了一个React组件。');
+                    console.log('🎨 检测到React组件模式，开始渲染...');
+                    const container = document.getElementById('app');
+                    if (container && window.React && window.ReactDOM) {
+                        const element = window.React.createElement(window.__EntryComponent);
+                        if (window.ReactDOM.createRoot) {
+                            const root = window.ReactDOM.createRoot(container);
+                            root.render(element);
+                        } else {
+                            window.ReactDOM.render(element, container);
+                        }
+                        console.log('✅ React组件渲染成功');
+                    }
                 }
             } catch (error) {
-                console.error('Execution Error:', error);
+                console.error('❌ 执行错误:', error);
                 showError('执行错误', error.stack || error.message);
             }
         }
+        
+        // 页面加载完成后初始化
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initApp);
+        } else {
+            initApp();
+        }
+    </script>`;
+    
+    // 注入JavaScript代码到页面末尾
+    if (htmlContent.includes('<!-- AUTO_INJECT_MAIN_JS -->')) {
+      htmlContent = htmlContent.replace('<!-- AUTO_INJECT_MAIN_JS -->', scriptInjection);
+    } else {
+      // 如果没有注入标记，插入到body结束标签前
+      htmlContent = htmlContent.replace('</body>', scriptInjection + '\n</body>');
+    }
+    
+    // 如果用户有额外的CSS，注入到head中
+    if (cssCode) {
+      const cssInjection = `<style>${cssCode}</style>`;
+      htmlContent = htmlContent.replace('</head>', cssInjection + '\n</head>');
+    }
+    
+    return htmlContent;
+  }, [files]);
+
+  // 默认HTML模板（当没有index.html时使用）
+  const generateFallbackHTML = useCallback((bundleCode: string, cssCode?: string): string => {
+    const dependencyScripts = dependencies
+      .filter(dep => dep.isInstalled && dep.cdnUrl)
+      .map(dep => `<script crossorigin src="${dep.cdnUrl}"></script>`)
+      .join('\n    ');
+
+    return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>前端预览</title>
+    <style>
+        body { 
+            margin: 0; 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; 
+            background: #f5f5f5;
+        }
+        #app { 
+            min-height: 100vh;
+            padding: 20px; 
+        }
+        ${cssCode || ''}
+    </style>
+    ${dependencyScripts}
+</head>
+<body>
+    <div id="app">
+        <div style="display: flex; justify-content: center; align-items: center; height: 100vh; color: #666;">
+            正在加载应用...
+        </div>
+    </div>
+    
+    <script>
+        // 执行编译后的代码
+        ${bundleCode}
     </script>
 </body>
 </html>`;
@@ -161,12 +176,15 @@ export const AdvancedPreview = forwardRef<
       const cssCode = cssFile?.content || '';
 
       // 生成HTML
-      const html = generatePreviewHTML(compilationResult.bundleCode, cssCode);
-      
+      const html = generatePreviewHTML(
+        compilationResult.bundleCode,
+        cssCode
+      );
+
       // 创建blob URL
       const blob = new Blob([html], { type: 'text/html' });
       const url = URL.createObjectURL(blob);
-      
+
       blobUrlRef.current = url;
       setPreviewUrl(url);
       setError(null);
@@ -179,7 +197,7 @@ export const AdvancedPreview = forwardRef<
   const handleCompilationComplete = useCallback((result: CompilationResult) => {
     setCompilationResult(result);
     setIsLoading(false);
-    
+
     if (result.success) {
       createPreviewUrl(result);
     } else {
@@ -378,7 +396,7 @@ export const AdvancedPreview = forwardRef<
             src={previewUrl}
             style={styles.iframe}
             title="预览"
-            sandbox="allow-scripts allow-same-origin"
+            sandbox="allow-scripts allow-same-origin allow-downloads"
             onLoad={() => {
               console.log('预览加载完成');
             }}

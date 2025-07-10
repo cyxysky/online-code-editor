@@ -236,8 +236,11 @@ export const CompilerStrategy = forwardRef<
       // 转换文件格式
       const modules: Record<string, any> = {};
       files.forEach(file => {
-        // 处理所有文件类型，包括CSS文件
-        const moduleId = file.name.replace(/\.(tsx?|jsx?|css)$/, '');
+        // CSS文件保留扩展名，JavaScript/TypeScript文件移除扩展名
+        const moduleId = file.name.endsWith('.css') 
+          ? file.name  // CSS文件保留完整文件名
+          : file.name.replace(/\.(tsx?|jsx?|js)$/, ''); // JS/TS文件移除扩展名
+        
         modules[moduleId] = {
           id: moduleId,
           content: file.content
@@ -245,9 +248,15 @@ export const CompilerStrategy = forwardRef<
       });
 
       // 发送编译请求
-      // 查找入口模块，优先使用 App.tsx，如果没有则使用第一个文件
-      const entryFile = files.find(f => f.name === 'App.tsx') || files[0];
-      const entryModuleId = entryFile ? entryFile.name.replace(/\.(tsx?|jsx?|css)$/, '') : 'app';
+      // 查找入口模块，优先使用 main.js，然后是 App.tsx，最后使用第一个文件
+      const entryFile = files.find(f => f.name === 'main.js') || 
+                        files.find(f => f.name === 'App.tsx') || 
+                        files[0];
+      const entryModuleId = entryFile 
+        ? (entryFile.name.endsWith('.css') 
+            ? entryFile.name  // CSS文件保留完整文件名
+            : entryFile.name.replace(/\.(tsx?|jsx?|js)$/, '')) // JS/TS文件移除扩展名
+        : 'main';
 
       workerRef.current.postMessage({
         id: requestId.toString(),
@@ -306,7 +315,9 @@ export const CompilerStrategy = forwardRef<
       await new Promise(resolve => setTimeout(resolve, 1000));
 
       // 简化的bundling逻辑
-      const entryFile = files.find(f => f.name === 'App.tsx') || files[0];
+      const entryFile = files.find(f => f.name === 'main.js') || 
+                        files.find(f => f.name === 'App.tsx') || 
+                        files[0];
       if (!entryFile) {
         throw new Error('未找到入口文件');
       }

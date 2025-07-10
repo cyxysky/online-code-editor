@@ -7,6 +7,7 @@ interface CodeEditorProps {
   onSave?: () => void; // 新增保存回调
   placeholder?: string;
   fileId?: string; // 文件ID，用于管理独立的历史记录
+  fileName?: string; // 文件名，用于检测注释类型
 }
 
 // 历史记录接口
@@ -21,7 +22,8 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
   onChange,
   onSave,
   placeholder = '请输入代码...',
-  fileId
+  fileId,
+  fileName
 }) => {
   const editorRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -348,6 +350,211 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
     return match ? match[1] : '';
   };
 
+  // 根据文件类型获取注释符号
+  const getCommentSymbols = () => {
+    if (!fileName) {
+      return { start: '// ', end: '' };
+    }
+    
+    const ext = fileName.split('.').pop()?.toLowerCase();
+    switch (ext) {
+      case 'html':
+        return { start: '<!-- ', end: ' -->' };
+      case 'css':
+        return { start: '/* ', end: ' */' };
+      case 'jsx':
+      case 'tsx':
+      case 'js':
+      case 'ts':
+      default:
+        return { start: '// ', end: '' };
+    }
+  };
+
+  // 切换注释
+  const handleToggleComment = () => {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || !editorRef.current) return;
+
+    const editor = editorRef.current;
+    const currentContent = getEditorTextContent(editor);
+    const range = selection.getRangeAt(0);
+    
+    if (range.collapsed) {
+      // 没有选中内容，注释/取消注释当前行
+      toggleCurrentLineComment(currentContent, range);
+    } else {
+      // 有选中内容，注释/取消注释选中的行
+      toggleSelectedLinesComment(currentContent, range);
+    }
+  };
+
+  // 注释/取消注释当前行
+  const toggleCurrentLineComment = (content: string, range: Range) => {
+    const editor = editorRef.current!;
+    const currentOffset = getTextOffset(editor, range.startContainer, range.startOffset);
+    const lines = content.split('\n');
+    
+    // 找到当前行
+    let lineStart = 0;
+    let currentLineIndex = 0;
+    
+    for (let i = 0; i < lines.length; i++) {
+      const lineEnd = lineStart + lines[i].length;
+      if (currentOffset >= lineStart && currentOffset <= lineEnd) {
+        currentLineIndex = i;
+        break;
+      }
+      lineStart = lineEnd + 1;
+    }
+
+    const { start: commentStart, end: commentEnd } = getCommentSymbols();
+    const currentLine = lines[currentLineIndex];
+    const trimmedLine = currentLine.trim();
+
+    let newLine: string;
+    let cursorOffset = 0;
+
+    // 检查是否已经被注释
+    if (commentEnd) {
+      // 块注释 (HTML/CSS)
+      if (trimmedLine.startsWith(commentStart) && trimmedLine.endsWith(commentEnd)) {
+        // 取消注释
+        const uncommented = trimmedLine.slice(commentStart.length, -commentEnd.length);
+        const leadingSpaces = currentLine.match(/^\s*/)?.[0] || '';
+        newLine = leadingSpaces + uncommented;
+        cursorOffset = -(commentStart.length);
+      } else {
+        // 添加注释
+        const leadingSpaces = currentLine.match(/^\s*/)?.[0] || '';
+        const content = currentLine.slice(leadingSpaces.length);
+        newLine = leadingSpaces + commentStart + content + commentEnd;
+        cursorOffset = commentStart.length;
+      }
+    } else {
+      // 行注释 (JS/TS/JSX/TSX)
+      if (trimmedLine.startsWith(commentStart)) {
+        // 取消注释
+        const leadingSpaces = currentLine.match(/^\s*/)?.[0] || '';
+        const afterComment = currentLine.slice(leadingSpaces.length + commentStart.length);
+        newLine = leadingSpaces + afterComment;
+        cursorOffset = -(commentStart.length);
+      } else {
+        // 添加注释
+        const leadingSpaces = currentLine.match(/^\s*/)?.[0] || '';
+        const content = currentLine.slice(leadingSpaces.length);
+        newLine = leadingSpaces + commentStart + content;
+        cursorOffset = commentStart.length;
+      }
+    }
+
+    // 更新内容
+    const newLines = [...lines];
+    newLines[currentLineIndex] = newLine;
+    const newContent = newLines.join('\n');
+    onChange(newContent);
+
+    // 计算新的光标位置
+    const newCursorPos = Math.max(0, currentOffset + cursorOffset);
+    
+    // 延迟设置光标位置
+    setTimeout(() => {
+      if (editorRef.current) {
+        restoreCursor(editorRef.current, newCursorPos, newCursorPos);
+      }
+    }, 0);
+  };
+
+  // 注释/取消注释选中的行
+  const toggleSelectedLinesComment = (content: string, range: Range) => {
+    const editor = editorRef.current!;
+    const startOffset = getTextOffset(editor, range.startContainer, range.startOffset);
+    const endOffset = getTextOffset(editor, range.endContainer, range.endOffset);
+    const lines = content.split('\n');
+    
+    // 找到选中的行范围
+    let startLineIndex = 0;
+    let endLineIndex = 0;
+    let charCount = 0;
+    
+    for (let i = 0; i < lines.length; i++) {
+      const lineEnd = charCount + lines[i].length;
+      if (charCount <= startOffset && startOffset <= lineEnd && startLineIndex === 0) {
+        startLineIndex = i;
+      }
+      if (charCount <= endOffset && endOffset <= lineEnd) {
+        endLineIndex = i;
+        break;
+      }
+      charCount = lineEnd + 1;
+    }
+
+    const { start: commentStart, end: commentEnd } = getCommentSymbols();
+    
+    // 检查选中的行是否都已经被注释
+    let allCommented = true;
+    for (let i = startLineIndex; i <= endLineIndex; i++) {
+      const trimmedLine = lines[i].trim();
+      if (trimmedLine.length > 0) { // 只检查非空行
+        if (commentEnd) {
+          // 块注释
+          if (!(trimmedLine.startsWith(commentStart) && trimmedLine.endsWith(commentEnd))) {
+            allCommented = false;
+            break;
+          }
+        } else {
+          // 行注释
+          if (!trimmedLine.startsWith(commentStart)) {
+            allCommented = false;
+            break;
+          }
+        }
+      }
+    }
+
+    // 应用注释/取消注释
+    const newLines = [...lines];
+    for (let i = startLineIndex; i <= endLineIndex; i++) {
+      const currentLine = newLines[i];
+      const trimmedLine = currentLine.trim();
+      
+      if (trimmedLine.length === 0) continue; // 跳过空行
+
+      if (allCommented) {
+        // 取消注释
+        if (commentEnd) {
+          // 块注释
+          if (trimmedLine.startsWith(commentStart) && trimmedLine.endsWith(commentEnd)) {
+            const uncommented = trimmedLine.slice(commentStart.length, -commentEnd.length);
+            const leadingSpaces = currentLine.match(/^\s*/)?.[0] || '';
+            newLines[i] = leadingSpaces + uncommented;
+          }
+        } else {
+          // 行注释
+          if (trimmedLine.startsWith(commentStart)) {
+            const leadingSpaces = currentLine.match(/^\s*/)?.[0] || '';
+            const afterComment = currentLine.slice(leadingSpaces.length + commentStart.length);
+            newLines[i] = leadingSpaces + afterComment;
+          }
+        }
+      } else {
+        // 添加注释
+        const leadingSpaces = currentLine.match(/^\s*/)?.[0] || '';
+        const content = currentLine.slice(leadingSpaces.length);
+        if (commentEnd) {
+          // 块注释
+          newLines[i] = leadingSpaces + commentStart + content + commentEnd;
+        } else {
+          // 行注释
+          newLines[i] = leadingSpaces + commentStart + content;
+        }
+      }
+    }
+
+    const newContent = newLines.join('\n');
+    onChange(newContent);
+  };
+
   // 处理键盘事件
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const selection = window.getSelection();
@@ -391,6 +598,11 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
         case 'v':
           e.preventDefault();
           handlePaste();
+          return;
+
+        case '/':
+          e.preventDefault();
+          handleToggleComment();
           return;
       }
     }
@@ -698,7 +910,45 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
     if (editorRef.current) {
       const content = getEditorTextContent(editorRef.current);
       console.log('📝 普通输入内容：', content);
+      
+      // 检查自动补全
+      handleAutoComplete(content, editorRef.current);
+      
       onChange(content);
+    }
+  };
+
+  // 自动补全功能
+  const handleAutoComplete = (content: string, editor: HTMLDivElement) => {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+
+    const range = selection.getRangeAt(0);
+    const currentOffset = getTextOffset(editor, range.startContainer, range.startOffset);
+    
+    // 检查是否刚输入了 /*
+    if (currentOffset >= 2) {
+      const beforeCursor = content.substring(currentOffset - 2, currentOffset);
+      
+      if (beforeCursor === '/*') {
+        // 检查后面是否已经有 */
+        const afterCursor = content.substring(currentOffset);
+        
+        if (!afterCursor.startsWith(' */')) {
+          // 自动补全 */
+          const newContent = content.substring(0, currentOffset) + ' */' + content.substring(currentOffset);
+          
+          // 更新内容
+          onChange(newContent);
+          
+          // 将光标置于 /* 和 */ 之间
+          setTimeout(() => {
+            if (editorRef.current) {
+              restoreCursor(editorRef.current, currentOffset + 1, currentOffset + 1);
+            }
+          }, 0);
+        }
+      }
     }
   };
 

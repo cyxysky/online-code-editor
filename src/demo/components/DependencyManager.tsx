@@ -16,7 +16,7 @@ interface DependencyManagerProps {
   onDependencyUpdate: (name: string, version: string) => void;
 }
 
-// 流行的React生态依赖库
+// 流行的前端生态依赖库
 const POPULAR_PACKAGES = [
   {
     name: 'lodash',
@@ -31,22 +31,28 @@ const POPULAR_PACKAGES = [
     cdnPath: 'dist/axios.min.js'
   },
   {
+    name: 'vue',
+    description: 'Vue.js框架',
+    defaultVersion: '3.3.8',
+    cdnPath: 'dist/vue.global.min.js'
+  },
+  {
+    name: 'react',
+    description: 'React框架',
+    defaultVersion: '18.2.0',
+    cdnPath: 'umd/react.production.min.js'
+  },
+  {
+    name: 'react-dom',
+    description: 'React DOM',
+    defaultVersion: '18.2.0',
+    cdnPath: 'umd/react-dom.production.min.js'
+  },
+  {
     name: 'moment',
     description: '日期处理库',
     defaultVersion: '2.29.4',
     cdnPath: 'moment.min.js'
-  },
-  {
-    name: 'classnames',
-    description: 'CSS类名工具',
-    defaultVersion: '2.3.2',
-    cdnPath: 'index.js'
-  },
-  {
-    name: 'uuid',
-    description: 'UUID生成器',
-    defaultVersion: '9.0.1',
-    cdnPath: 'dist/umd/uuid.min.js'
   },
   {
     name: 'dayjs',
@@ -55,10 +61,22 @@ const POPULAR_PACKAGES = [
     cdnPath: 'dayjs.min.js'
   },
   {
+    name: 'three',
+    description: '3D图形库',
+    defaultVersion: '0.158.0',
+    cdnPath: 'build/three.min.js'
+  },
+  {
     name: 'ramda',
     description: '函数式编程库',
     defaultVersion: '0.29.1',
     cdnPath: 'dist/ramda.min.js'
+  },
+  {
+    name: 'd3',
+    description: '数据可视化库',
+    defaultVersion: '7.8.5',
+    cdnPath: 'dist/d3.min.js'
   }
 ];
 
@@ -67,14 +85,31 @@ const CDN_PATH_MAP: Record<string, string> = {
   'lodash': 'lodash.min.js',
   'axios': 'dist/axios.min.js', 
   'moment': 'moment.min.js',
-  'classnames': 'index.js',
-  'uuid': 'dist/umd/uuid.min.js',
   'dayjs': 'dayjs.min.js',
   'ramda': 'dist/ramda.min.js',
+  // React 生态
+  'react': 'umd/react.production.min.js',
+  'react-dom': 'umd/react-dom.production.min.js',
   'react-router-dom': 'dist/umd/react-router-dom.min.js',
   'styled-components': 'dist/styled-components.min.js',
   'prop-types': 'prop-types.min.js',
-  'react-transition-group': 'dist/react-transition-group.min.js'
+  'react-transition-group': 'dist/react-transition-group.min.js',
+  // Vue 生态
+  'vue': 'dist/vue.global.min.js',
+  'vuex': 'dist/vuex.global.min.js',
+  'vue-router': 'dist/vue-router.global.min.js',
+  // 其他流行库
+  'three': 'build/three.min.js',
+  'd3': 'dist/d3.min.js',
+  'gsap': 'dist/gsap.min.js',
+  'chart.js': 'dist/chart.min.js',
+  'fabric': 'dist/fabric.min.js',
+  'pixi.js': 'dist/pixi.min.js',
+  'babylonjs': 'dist/babylon.js',
+  // 工具库
+  'classnames': 'index.js',
+  'uuid': 'dist/umd/uuid.min.js',
+  'jquery': 'dist/jquery.min.js'
 };
 
 const DependencyManager: React.FC<DependencyManagerProps> = ({
@@ -102,25 +137,81 @@ const DependencyManager: React.FC<DependencyManagerProps> = ({
     }
   }, []);
 
-  // 生成CDN URL
-  const generateCdnUrl = useCallback((packageName: string, version: string): string => {
-    // 优先使用已知的CDN路径映射
-    const knownPath = CDN_PATH_MAP[packageName];
-    if (knownPath) {
-      return `https://cdn.jsdelivr.net/npm/${packageName}@${version}/${knownPath}`;
+  // 从package.json分析正确的入口文件
+  const analyzePackageEntry = useCallback((packageInfo: any): string[] => {
+    const possiblePaths: string[] = [];
+    
+    // 1. 优先使用CDN特定字段
+    if (packageInfo.unpkg) {
+      possiblePaths.push(packageInfo.unpkg);
     }
     
-    // 对于未知包，尝试常见的几种路径
-    const commonPaths = [
-      `${packageName}.min.js`,           // 包名.min.js
-      `dist/${packageName}.min.js`,      // dist/包名.min.js  
-      `dist/umd/${packageName}.min.js`,  // dist/umd/包名.min.js
-      'index.js',                        // index.js
-      'dist/index.js'                    // dist/index.js
+    if (packageInfo.jsdelivr) {
+      possiblePaths.push(packageInfo.jsdelivr);
+    }
+    
+    // 2. 浏览器环境入口
+    if (packageInfo.browser) {
+      if (typeof packageInfo.browser === 'string') {
+        possiblePaths.push(packageInfo.browser);
+      } else if (typeof packageInfo.browser === 'object') {
+        // browser字段是对象时，查找主入口的映射
+        const browserMain = packageInfo.browser[packageInfo.main || './index.js'];
+        if (browserMain) {
+          possiblePaths.push(browserMain);
+        }
+      }
+    }
+    
+    // 3. ES模块入口（通常更现代）
+    if (packageInfo.module) {
+      possiblePaths.push(packageInfo.module);
+    }
+    
+    // 4. CommonJS主入口
+    if (packageInfo.main) {
+      possiblePaths.push(packageInfo.main);
+    }
+    
+    // 5. 如果都没有，使用默认的index.js
+    if (possiblePaths.length === 0) {
+      possiblePaths.push('index.js');
+    }
+    
+    // 6. 为每个路径生成可能的变体（压缩版本）
+    const allPaths: string[] = [];
+    possiblePaths.forEach(path => {
+      // 原始路径
+      allPaths.push(path.replace(/^\.\//, ''));
+      
+      // 尝试压缩版本
+      if (!path.includes('.min.')) {
+        const minPath = path.replace(/\.js$/, '.min.js');
+        allPaths.push(minPath.replace(/^\.\//, ''));
+      }
+      
+      // 尝试UMD版本（用于浏览器）
+      if (!path.includes('umd') && !path.includes('dist')) {
+        const umdPath = `dist/umd/${path.replace(/^\.\//, '')}`;
+        allPaths.push(umdPath);
+        allPaths.push(umdPath.replace(/\.js$/, '.min.js'));
+      }
+    });
+    
+    // 7. 添加常见的fallback路径
+    const fallbackPaths = [
+      `dist/${packageInfo.name}.min.js`,
+      `dist/${packageInfo.name}.js`,
+      `${packageInfo.name}.min.js`,
+      `${packageInfo.name}.js`,
+      'dist/index.min.js',
+      'dist/index.js'
     ];
     
-    // 默认返回第一个路径，实际使用时会自动尝试其他路径
-    return `https://cdn.jsdelivr.net/npm/${packageName}@${version}/${commonPaths[0]}`;
+    allPaths.push(...fallbackPaths);
+    
+    // 去重并返回
+    return [...new Set(allPaths)];
   }, []);
 
   // 搜索包
@@ -137,47 +228,102 @@ const DependencyManager: React.FC<DependencyManagerProps> = ({
     setSearchResults(filtered);
   }, []);
 
-  // 验证CDN URL是否可访问
+  // 验证CDN URL是否可访问且是有效的JavaScript文件
   const validateCdnUrl = useCallback(async (url: string): Promise<boolean> => {
     try {
-      const response = await fetch(url, { method: 'HEAD' });
-      return response.ok;
-    } catch {
+      // 先使用HEAD请求检查文件存在性
+      const headResponse = await fetch(url, { method: 'HEAD' });
+      if (!headResponse.ok) {
+        return false;
+      }
+      
+      // 检查Content-Type
+      const contentType = headResponse.headers.get('content-type');
+      if (contentType && !contentType.includes('javascript') && !contentType.includes('application/javascript')) {
+        // 如果Content-Type不是JavaScript，再做一次GET请求检查内容
+        const getResponse = await fetch(url);
+        if (!getResponse.ok) {
+          return false;
+        }
+        
+        // 读取一小部分内容来验证是否是JavaScript
+        const text = await getResponse.text();
+        
+        // 检查是否包含常见的JavaScript模式
+        const jsPatterns = [
+          /^\/\*[\s\S]*?\*\//, // 注释
+          /\bfunction\b/,      // function关键字
+          /\bvar\b|\blet\b|\bconst\b/, // 变量声明
+          /\bmodule\.exports\b/, // CommonJS
+          /\bexport\b/,        // ES模块
+          /\breturn\b/,        // return语句
+          /[{};]/              // JavaScript语法符号
+        ];
+        
+        const hasJsContent = jsPatterns.some(pattern => pattern.test(text.substring(0, 1000)));
+        
+        if (!hasJsContent) {
+          console.warn(`⚠️ URL返回的内容不是有效的JavaScript: ${url}`);
+          return false;
+        }
+      }
+      
+      return true;
+    } catch (error) {
+      console.error(`❌ 验证CDN URL失败: ${url}`, error);
       return false;
     }
   }, []);
 
-  // 为包查找可用的CDN URL
-  const findValidCdnUrl = useCallback(async (packageName: string, version: string): Promise<string> => {
+  // 为包查找可用的CDN URL（基于package.json分析）
+  const findValidCdnUrl = useCallback(async (packageName: string, version: string, packageInfo?: any): Promise<string> => {
+    console.log(`📦 开始为 ${packageName}@${version} 查找可用CDN URL`);
+    
+    try {
+      // 如果没有传入packageInfo，先获取
+      let pkgInfo = packageInfo;
+      if (!pkgInfo) {
+        console.log(`📋 获取 ${packageName} 的package.json信息...`);
+        pkgInfo = await fetchPackageInfo(packageName);
+      }
+      
+      // 分析package.json获取可能的入口文件路径
+      const possiblePaths = analyzePackageEntry(pkgInfo);
+      console.log(`🔍 从package.json分析得到 ${possiblePaths.length} 个可能路径:`, possiblePaths);
+      
+      // 按优先级尝试每个路径
+      for (let i = 0; i < possiblePaths.length; i++) {
+        const path = possiblePaths[i];
+        const url = `https://cdn.jsdelivr.net/npm/${packageName}@${version}/${path}`;
+        
+        console.log(`🔍 [${i + 1}/${possiblePaths.length}] 验证: ${url}`);
+        
+        if (await validateCdnUrl(url)) {
+          console.log(`✅ 找到可用CDN URL: ${url}`);
+          return url;
+        }
+      }
+      
+      console.warn(`⚠️ 所有路径都不可用，使用fallback路径`);
+      
+    } catch (error) {
+      console.error(`❌ 分析package.json失败:`, error);
+    }
+    
+    // Fallback: 使用预定义映射或默认路径
     const knownPath = CDN_PATH_MAP[packageName];
     if (knownPath) {
-      return `https://cdn.jsdelivr.net/npm/${packageName}@${version}/${knownPath}`;
+      const fallbackUrl = `https://cdn.jsdelivr.net/npm/${packageName}@${version}/${knownPath}`;
+      console.log(`🔄 使用预定义路径: ${fallbackUrl}`);
+      return fallbackUrl;
     }
-
-    // 对于未知包，尝试多种常见路径
-    const tryPaths = [
-      `${packageName}.min.js`,
-      `dist/${packageName}.min.js`,
-      `dist/umd/${packageName}.min.js`,
-      'index.js',
-      'dist/index.js',
-      `${packageName}.js`,
-      `dist/${packageName}.js`,
-      'dist/index.min.js'
-    ];
-
-    for (const path of tryPaths) {
-      const url = `https://cdn.jsdelivr.net/npm/${packageName}@${version}/${path}`;
-      console.log(`🔍 尝试CDN路径: ${url}`);
-      if (await validateCdnUrl(url)) {
-        console.log(`✅ 找到可用路径: ${url}`);
-        return url;
-      }
-    }
-
-    // 如果都不行，返回默认路径
-    return `https://cdn.jsdelivr.net/npm/${packageName}@${version}/${packageName}.min.js`;
-  }, [validateCdnUrl]);
+    
+    // 最后的fallback
+    const defaultUrl = `https://cdn.jsdelivr.net/npm/${packageName}@${version}/${packageName}.min.js`;
+    console.log(`🔄 使用默认路径: ${defaultUrl}`);
+    return defaultUrl;
+    
+  }, [validateCdnUrl, fetchPackageInfo, analyzePackageEntry]);
 
   // 添加依赖
   const handleAddDependency = useCallback(async () => {
@@ -195,9 +341,12 @@ const DependencyManager: React.FC<DependencyManagerProps> = ({
     try {
       console.log(`📦 开始添加自定义依赖: ${newPackageName}`);
       
+      // 获取package.json信息
       const packageInfo = await fetchPackageInfo(newPackageName);
       const version = newPackageVersion || packageInfo.version;
-      const cdnUrl = await findValidCdnUrl(newPackageName, version);
+      
+      // 基于package.json分析并查找可用的CDN URL
+      const cdnUrl = await findValidCdnUrl(newPackageName, version, packageInfo);
 
       const finalDependency: Dependency = {
         name: newPackageName,
@@ -234,11 +383,11 @@ const DependencyManager: React.FC<DependencyManagerProps> = ({
     try {
       console.log(`📦 开始添加依赖: ${packageName}@${version}`);
       
-      // 并行获取包信息和CDN URL
-      const [packageInfo, cdnUrl] = await Promise.all([
-        fetchPackageInfo(packageName),
-        findValidCdnUrl(packageName, version)
-      ]);
+      // 先获取package.json信息
+      const packageInfo = await fetchPackageInfo(packageName);
+      
+      // 基于package.json分析并查找可用的CDN URL
+      const cdnUrl = await findValidCdnUrl(packageName, version, packageInfo);
 
       const finalDependency: Dependency = {
         name: packageName,
